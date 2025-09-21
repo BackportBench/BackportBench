@@ -1,7 +1,7 @@
 # BackportBench: A Multilingual Benchmark for Automated Patch Backporting
 BackportBench is a multilingual benchmark that contains 202 patch backporting problems from PyPI, Maven, and npm, each with executable Docker environments and relevant test cases.
 
-This repository includes the code we used to collect the initial data of BackportBench and the evaluation pipeline.
+This repository includes the code we used to collect the initial data of BackportBench and the evaluation pipeline. `eval` also includes metadata for each BackportBench task instance.
 
 All the Docker images we used for evaluation were uploaded to [DockerHub](https://hub.docker.com/u/backportbench). 
 We recommend you to pull the image manually first, e.g., `docker pull backportbench/django:220`, to avoid potential network issues during automated pulling.
