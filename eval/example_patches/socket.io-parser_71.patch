@@ -1,0 +1,84 @@
+diff --git a/.gitignore b/.gitignore
+index bb66ab2..0712d9b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,12 @@
+ node_modules
+ build
+ components
++node_modules/
++build/
++dist/
++.next/
++coverage/
++.env
++npm-debug.log*
++yarn-debug.log*
++yarn-error.log*
+diff --git a/index.js b/index.js
+index 245a800..5cd1d55 100644
+--- a/index.js
++++ b/index.js
+@@ -317,21 +317,20 @@ function decodeString(str) {
+     var start = i + 1;
+     while (++i) {
+       var c = str.charAt(i);
+-      if (null == c || Number(c) != c) {
+-        --i;
+-        break;
+-      }
+       if (i === str.length) break;
+     }
+     p.id = Number(str.substring(start, i + 1));
+   }
+ 
++
++
++
++
+   // look up json data
+   if (str.charAt(++i)) {
+     var payload = tryParse(str.substr(i));
+-    var isPayloadValid = payload !== false && (p.type === exports.ERROR || isArray(payload));
++    var isPayloadValid = payload !== false && isValidPayload(p.type, payload);
+     if (isPayloadValid) {
+-      p.data = payload;
+     } else {
+       return error('invalid payload');
+     }
+@@ -341,6 +340,35 @@ function decodeString(str) {
+   return p;
+ }
+ 
++
++/**
++ * Validates the payload based on packet type
++ *
++ * @param {Number} type - packet type
++ * @param {Object} payload - packet data
++ * @return {Boolean} validity of payload
++ * @api private
++ */
++
++function isValidPayload(type, payload) {
++  switch (type) {
++    case exports.CONNECT:
++      return typeof payload === "object";
++    case exports.DISCONNECT:
++      return payload === undefined;
++    case exports.CONNECT_ERROR:
++      return typeof payload === "string" || typeof payload === "object";
++    case exports.EVENT:
++    case exports.BINARY_EVENT:
++      return isArray(payload) && (typeof payload[0] === "string" || typeof payload[0] === "number");
++    case exports.ACK:
++    case exports.BINARY_ACK:
++      return isArray(payload);
++    default:
++      return false;
++  }
++}
++
+ function tryParse(str) {
+   try {
+     return JSON.parse(str);

@@ -1,0 +1,747 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 0000000000..59d4ec1680
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,144 @@
++#!/usr/bin/env python3
++
++import os
++import sys
++import django
++from django.conf import settings
++from django.test.client import FakePayload, encode_multipart, BOUNDARY, MULTIPART_CONTENT
++from django.core.handlers.wsgi import WSGIRequest
++from django.core.exceptions import TooManyFilesSent
++from django.test import override_settings
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++        DATA_UPLOAD_MAX_NUMBER_FILES=100,  # Default value
++    )
++
++django.setup()
++
++def create_multipart_payload(num_files):
++    """Create a multipart payload with the specified number of files."""
++    payload_parts = []
++    
++    for i in range(num_files):
++        payload_parts.extend([
++            "--boundary",
++            f'Content-Disposition: form-data; name="file{i+1}"; filename="file{i+1}.txt"',
++            "Content-Type: text/plain",
++            "",
++            f"Content of file {i+1}",
++        ])
++    
++    payload_parts.extend(["--boundary--"])
++    
++    payload_content = "\r\n".join(payload_parts)
++    return FakePayload(payload_content.encode('utf-8'))
++
++def test_file_upload_limit(num_files, limit, should_fail=False):
++    """Test file upload with specified number of files and limit."""
++    
++    print(f"\n=== Testing {num_files} files with limit {limit} ===")
++    
++    # Override the setting using @override_settings decorator approach
++    from django.test.utils import override_settings
++    
++    @override_settings(DATA_UPLOAD_MAX_NUMBER_FILES=limit)
++    def run_test():
++        payload = create_multipart_payload(num_files)
++        
++        environ = {
++            "REQUEST_METHOD": "POST",
++            "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++            "CONTENT_LENGTH": len(payload),
++            "wsgi.input": payload,
++            "SERVER_NAME": "test",
++            "SERVER_PORT": "8000",
++        }
++        
++        request = WSGIRequest(environ)
++        
++        try:
++            request._load_post_and_files()
++            if should_fail:
++                print(f"ERROR: Expected TooManyFilesSent exception but got none")
++                return False
++            else:
++                print(f"SUCCESS: Files loaded without error")
++                print(f"Number of files: {len(request.FILES)}")
++                print(f"Files: {list(request.FILES.keys())}")
++                return True
++        except TooManyFilesSent as e:
++            if should_fail:
++                print(f"SUCCESS: Got expected TooManyFilesSent: {e}")
++                return True
++            else:
++                print(f"ERROR: Unexpected TooManyFilesSent: {e}")
++                return False
++        except Exception as e:
++            print(f"ERROR: Unexpected exception {type(e).__name__}: {e}")
++            return False
++    
++    return run_test()
++
++def test_no_limit():
++    """Test that None limit allows unlimited files."""
++    print(f"\n=== Testing unlimited files (None limit) ===")
++    
++    from django.test.utils import override_settings
++    
++    @override_settings(DATA_UPLOAD_MAX_NUMBER_FILES=None)
++    def run_test():
++        payload = create_multipart_payload(10)  # Try 10 files
++        
++        environ = {
++            "REQUEST_METHOD": "POST",
++            "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++            "CONTENT_LENGTH": len(payload),
++            "wsgi.input": payload,
++            "SERVER_NAME": "test",
++            "SERVER_PORT": "8000",
++        }
++        
++        request = WSGIRequest(environ)
++        
++        try:
++            request._load_post_and_files()
++            print(f"SUCCESS: Files loaded without error")
++            print(f"Number of files: {len(request.FILES)}")
++            return True
++        except Exception as e:
++            print(f"ERROR: Unexpected exception {type(e).__name__}: {e}")
++            return False
++    
++    return run_test()
++
++if __name__ == "__main__":
++    all_passed = True
++    
++    # Test cases
++    test_cases = [
++        (2, 3, False),  # 2 files, limit 3 - should pass
++        (3, 3, False),  # 3 files, limit 3 - should pass
++        (4, 3, True),   # 4 files, limit 3 - should fail
++        (1, 1, False),  # 1 file, limit 1 - should pass
++        (2, 1, True),   # 2 files, limit 1 - should fail
++    ]
++    
++    for num_files, limit, should_fail in test_cases:
++        if not test_file_upload_limit(num_files, limit, should_fail):
++            all_passed = False
++    
++    # Test no limit
++    if not test_no_limit():
++        all_passed = False
++    
++    print(f"\n=== SUMMARY ===")
++    if all_passed:
++        print("All tests passed!")
++    else:
++        print("Some tests failed!")
++        sys.exit(1)
+\ No newline at end of file
+diff --git a/django/conf/global_settings.py b/django/conf/global_settings.py
+index ba0f391f8a..44de0c9aa5 100644
+--- a/django/conf/global_settings.py
++++ b/django/conf/global_settings.py
+@@ -309,6 +309,10 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 2621440  # i.e. 2.5 MB
+ # SuspiciousOperation (TooManyFieldsSent) is raised.
+ DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
+ 
++# Maximum number of files encoded in a multipart upload that will be read
++# before a SuspiciousOperation (TooManyFilesSent) is raised.
++DATA_UPLOAD_MAX_NUMBER_FILES = 100
++
+ # Directory in which upload streamed files will be temporarily saved. A value of
+ # `None` will make Django use the operating system's default temporary directory
+ # (i.e. "/tmp" on *nix systems).
+diff --git a/django/core/exceptions.py b/django/core/exceptions.py
+index 7be4e16bc5..e06b33e7bc 100644
+--- a/django/core/exceptions.py
++++ b/django/core/exceptions.py
+@@ -67,6 +67,15 @@ class TooManyFieldsSent(SuspiciousOperation):
+     pass
+ 
+ 
++class TooManyFilesSent(SuspiciousOperation):
++    """
++    The number of fields in a GET or POST request exceeded
++    settings.DATA_UPLOAD_MAX_NUMBER_FILES.
++    """
++
++    pass
++
++
+ class RequestDataTooBig(SuspiciousOperation):
+     """
+     The size of the request (excluding any file uploads) exceeded
+diff --git a/django/core/handlers/exception.py b/django/core/handlers/exception.py
+index 622c53134b..865a02aaee 100644
+--- a/django/core/handlers/exception.py
++++ b/django/core/handlers/exception.py
+@@ -13,6 +13,7 @@ from django.core.exceptions import (
+     RequestDataTooBig,
+     SuspiciousOperation,
+     TooManyFieldsSent,
++    TooManyFilesSent,
+ )
+ from django.http import Http404
+ from django.http.multipartparser import MultiPartParserError
+@@ -111,7 +112,7 @@ def response_for_exception(request, exc):
+             exc_info=sys.exc_info(),
+         )
+     elif isinstance(exc, SuspiciousOperation):
+-        if isinstance(exc, (RequestDataTooBig, TooManyFieldsSent)):
++        if isinstance(exc, (RequestDataTooBig, TooManyFieldsSent, TooManyFilesSent)):
+             # POST data can't be accessed again, otherwise the original
+             # exception would be raised.
+             request._mark_post_parse_error()
+diff --git a/django/http/multipartparser.py b/django/http/multipartparser.py
+index 77a4b1f140..64f8c6d4cf 100644
+--- a/django/http/multipartparser.py
++++ b/django/http/multipartparser.py
+@@ -16,6 +16,7 @@ from django.core.exceptions import (
+     RequestDataTooBig,
+     SuspiciousMultipartForm,
+     TooManyFieldsSent,
++    TooManyFilesSent,
+ )
+ from django.core.files.uploadhandler import SkipFile, StopFutureHandlers, StopUpload
+ from django.utils.datastructures import MultiValueDict
+@@ -39,6 +40,7 @@ class InputStreamExhausted(Exception):
+ RAW = "raw"
+ FILE = "file"
+ FIELD = "field"
++FIELD_TYPES = frozenset([FIELD, RAW])
+ 
+ 
+ class MultiPartParser:
+@@ -109,6 +111,22 @@ class MultiPartParser:
+         self._upload_handlers = upload_handlers
+ 
+     def parse(self):
++        # Call the actual parse routine and close all open files in case of
++        # errors. This is needed because if exceptions are thrown the
++        # MultiPartParser will not be garbage collected immediately and
++        # resources would be kept alive. This is only needed for errors because
++        # the Request object closes all uploaded files at the end of the
++        # request.
++        try:
++            return self._parse()
++        except Exception:
++            if hasattr(self, "_files"):
++                for _, files in self._files.lists():
++                    for fileobj in files:
++                        fileobj.close()
++            raise
++
++    def _parse(self):
+         """
+         Parse the POST data and break it into a FILES MultiValueDict and a POST
+         MultiValueDict.
+@@ -154,6 +172,8 @@ class MultiPartParser:
+         num_bytes_read = 0
+         # To count the number of keys in the request.
+         num_post_keys = 0
++        # To count the number of files in the request.
++        num_files = 0
+         # To limit the amount of data read from the request.
+         read_size = None
+         # Whether a file upload is finished.
+@@ -169,6 +189,20 @@ class MultiPartParser:
+                     old_field_name = None
+                     uploaded_file = True
+ 
++                if (
++                    item_type in FIELD_TYPES
++                    and settings.DATA_UPLOAD_MAX_NUMBER_FIELDS is not None
++                ):
++                    # Avoid storing more than DATA_UPLOAD_MAX_NUMBER_FIELDS.
++                    num_post_keys += 1
++                    # 2 accounts for empty raw fields before and after the
++                    # last boundary.
++                    if settings.DATA_UPLOAD_MAX_NUMBER_FIELDS + 2 < num_post_keys:
++                        raise TooManyFieldsSent(
++                            "The number of GET/POST parameters exceeded "
++                            "settings.DATA_UPLOAD_MAX_NUMBER_FIELDS."
++                        )
++
+                 try:
+                     disposition = meta_data["content-disposition"][1]
+                     field_name = disposition["name"].strip()
+@@ -181,17 +215,6 @@ class MultiPartParser:
+                 field_name = force_str(field_name, encoding, errors="replace")
+ 
+                 if item_type == FIELD:
+-                    # Avoid storing more than DATA_UPLOAD_MAX_NUMBER_FIELDS.
+-                    num_post_keys += 1
+-                    if (
+-                        settings.DATA_UPLOAD_MAX_NUMBER_FIELDS is not None
+-                        and settings.DATA_UPLOAD_MAX_NUMBER_FIELDS < num_post_keys
+-                    ):
+-                        raise TooManyFieldsSent(
+-                            "The number of GET/POST parameters exceeded "
+-                            "settings.DATA_UPLOAD_MAX_NUMBER_FIELDS."
+-                        )
+-
+                     # Avoid reading more than DATA_UPLOAD_MAX_MEMORY_SIZE.
+                     if settings.DATA_UPLOAD_MAX_MEMORY_SIZE is not None:
+                         read_size = (
+@@ -226,6 +249,16 @@ class MultiPartParser:
+                         field_name, force_str(data, encoding, errors="replace")
+                     )
+                 elif item_type == FILE:
++                    # Avoid storing more than DATA_UPLOAD_MAX_NUMBER_FILES.
++                    num_files += 1
++                    if (
++                        settings.DATA_UPLOAD_MAX_NUMBER_FILES is not None
++                        and num_files > settings.DATA_UPLOAD_MAX_NUMBER_FILES
++                    ):
++                        raise TooManyFilesSent(
++                            "The number of files exceeded "
++                            "settings.DATA_UPLOAD_MAX_NUMBER_FILES."
++                        )
+                     # This is a file, use the handler...
+                     file_name = disposition.get("filename")
+                     if file_name:
+@@ -303,8 +336,13 @@ class MultiPartParser:
+                         # Handle file upload completions on next iteration.
+                         old_field_name = field_name
+                 else:
+-                    # If this is neither a FIELD or a FILE, just exhaust the stream.
+-                    exhaust(stream)
++                    # If this is neither a FIELD nor a FILE, exhaust the field
++                    # stream. Note: There could be an error here at some point,
++                    # but there will be at least two RAW types (before and
++                    # after the other boundaries). This branch is usually not
++                    # reached at all, because a missing content-disposition
++                    # header will skip the whole boundary.
++                    exhaust(field_stream)
+         except StopUpload as e:
+             self._close_files()
+             if not e.connection_reset:
+diff --git a/django/http/request.py b/django/http/request.py
+index f32d57ba67..ecd456b066 100644
+--- a/django/http/request.py
++++ b/django/http/request.py
+@@ -12,6 +12,7 @@ from django.core.exceptions import (
+     ImproperlyConfigured,
+     RequestDataTooBig,
+     TooManyFieldsSent,
++    TooManyFilesSent,
+ )
+ from django.core.files import uploadhandler
+ from django.http.multipartparser import MultiPartParser, MultiPartParserError
+@@ -367,7 +368,7 @@ class HttpRequest:
+                 data = self
+             try:
+                 self._post, self._files = self.parse_file_upload(self.META, data)
+-            except MultiPartParserError:
++            except (MultiPartParserError, TooManyFilesSent):
+                 # An error occurred while parsing POST data. Since when
+                 # formatting the error the request handler might access
+                 # self.POST, set self._post and self._file to prevent
+diff --git a/test_field_limits.py b/test_field_limits.py
+new file mode 100644
+index 0000000000..61c2f1325b
+--- /dev/null
++++ b/test_field_limits.py
+@@ -0,0 +1,130 @@
++#!/usr/bin/env python3
++
++import os
++import sys
++import django
++from django.conf import settings
++from django.test.client import FakePayload
++from django.core.handlers.wsgi import WSGIRequest
++from django.core.exceptions import TooManyFieldsSent
++from django.test.utils import override_settings
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++        DATA_UPLOAD_MAX_NUMBER_FIELDS=1000,  # Default value
++    )
++
++django.setup()
++
++def test_field_limit():
++    """Test that field limits still work correctly."""
++    print("=== Testing field limits ===")
++    
++    @override_settings(DATA_UPLOAD_MAX_NUMBER_FIELDS=2)
++    def run_test():
++        # Create a form with 3 fields
++        payload_content = (
++            "--boundary\r\n"
++            'Content-Disposition: form-data; name="field1"\r\n'
++            "\r\n"
++            "value1\r\n"
++            "--boundary\r\n"
++            'Content-Disposition: form-data; name="field2"\r\n'
++            "\r\n"
++            "value2\r\n"
++            "--boundary\r\n"
++            'Content-Disposition: form-data; name="field3"\r\n'
++            "\r\n"
++            "value3\r\n"
++            "--boundary--\r\n"
++        )
++        
++        payload = FakePayload(payload_content.encode('utf-8'))
++        
++        environ = {
++            "REQUEST_METHOD": "POST",
++            "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++            "CONTENT_LENGTH": len(payload),
++            "wsgi.input": payload,
++            "SERVER_NAME": "test",
++            "SERVER_PORT": "8000",
++        }
++        
++        request = WSGIRequest(environ)
++        
++        try:
++            request._load_post_and_files()
++            print("ERROR: Expected TooManyFieldsSent exception but got none")
++            return False
++        except TooManyFieldsSent as e:
++            print(f"SUCCESS: Got expected TooManyFieldsSent: {e}")
++            return True
++        except Exception as e:
++            print(f"ERROR: Unexpected exception {type(e).__name__}: {e}")
++            return False
++    
++    return run_test()
++
++def test_field_limit_ok():
++    """Test that field limits work when under the limit."""
++    print("=== Testing field limits (under limit) ===")
++    
++    @override_settings(DATA_UPLOAD_MAX_NUMBER_FIELDS=5)
++    def run_test():
++        # Create a form with 2 fields
++        payload_content = (
++            "--boundary\r\n"
++            'Content-Disposition: form-data; name="field1"\r\n'
++            "\r\n"
++            "value1\r\n"
++            "--boundary\r\n"
++            'Content-Disposition: form-data; name="field2"\r\n'
++            "\r\n"
++            "value2\r\n"
++            "--boundary--\r\n"
++        )
++        
++        payload = FakePayload(payload_content.encode('utf-8'))
++        
++        environ = {
++            "REQUEST_METHOD": "POST",
++            "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++            "CONTENT_LENGTH": len(payload),
++            "wsgi.input": payload,
++            "SERVER_NAME": "test",
++            "SERVER_PORT": "8000",
++        }
++        
++        request = WSGIRequest(environ)
++        
++        try:
++            request._load_post_and_files()
++            print(f"SUCCESS: Fields loaded without error")
++            print(f"Number of fields: {len(request.POST)}")
++            print(f"Fields: {dict(request.POST)}")
++            return True
++        except Exception as e:
++            print(f"ERROR: Unexpected exception {type(e).__name__}: {e}")
++            return False
++    
++    return run_test()
++
++if __name__ == "__main__":
++    all_passed = True
++    
++    if not test_field_limit():
++        all_passed = False
++    
++    if not test_field_limit_ok():
++        all_passed = False
++    
++    print(f"\n=== SUMMARY ===")
++    if all_passed:
++        print("All field tests passed!")
++    else:
++        print("Some field tests failed!")
++        sys.exit(1)
+\ No newline at end of file
+diff --git a/test_file_upload_limit.py b/test_file_upload_limit.py
+new file mode 100644
+index 0000000000..6dd9bb7e6b
+--- /dev/null
++++ b/test_file_upload_limit.py
+@@ -0,0 +1,69 @@
++#!/usr/bin/env python3
++
++import os
++import sys
++import django
++from django.conf import settings
++from django.test.client import FakePayload, encode_multipart, BOUNDARY, MULTIPART_CONTENT
++from django.core.handlers.wsgi import WSGIRequest
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++        DATA_UPLOAD_MAX_NUMBER_FILES=2,  # This setting doesn't exist yet
++    )
++
++django.setup()
++
++def test_file_upload_limit():
++    """Test that file upload limits work correctly."""
++    
++    # Create a multipart payload with 3 files - need to use proper file format
++    from io import BytesIO
++    
++    payload_content = (
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file1"; filename="file1.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 1\r\n"
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file2"; filename="file2.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 2\r\n"
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file3"; filename="file3.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 3\r\n"
++        "--boundary--\r\n"
++    )
++    
++    payload = FakePayload(payload_content.encode('utf-8'))
++    
++    environ = {
++        "REQUEST_METHOD": "POST",
++        "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++        "CONTENT_LENGTH": len(payload),
++        "wsgi.input": payload,
++        "SERVER_NAME": "test",
++        "SERVER_PORT": "8000",
++    }
++    
++    request = WSGIRequest(environ)
++    
++    try:
++        # This should trigger the file limit if implemented
++        request._load_post_and_files()
++        print("SUCCESS: Files loaded without error")
++        print(f"Number of files: {len(request.FILES)}")
++        print(f"Files: {list(request.FILES.keys())}")
++    except Exception as e:
++        print(f"ERROR: {type(e).__name__}: {e}")
++
++if __name__ == "__main__":
++    test_file_upload_limit()
+\ No newline at end of file
+diff --git a/test_wsgi_handler.py b/test_wsgi_handler.py
+new file mode 100644
+index 0000000000..f165311f4f
+--- /dev/null
++++ b/test_wsgi_handler.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++
++import os
++import sys
++import django
++from django.conf import settings
++from django.test.client import FakePayload
++from django.core.handlers.wsgi import WSGIHandler
++from django.test.utils import override_settings
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++        DATA_UPLOAD_MAX_NUMBER_FILES=100,
++        ROOT_URLCONF='django.urls',  # Use Django's default URLs
++    )
++
++django.setup()
++
++def test_wsgi_handler_file_limit():
++    """Test that WSGI handler returns 400 for too many files."""
++    print("=== Testing WSGI handler file limit ===")
++    
++    # Create a multipart payload with 3 files
++    payload_content = (
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file1"; filename="file1.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 1\r\n"
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file2"; filename="file2.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 2\r\n"
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file3"; filename="file3.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 3\r\n"
++        "--boundary--\r\n"
++    )
++    
++    payload = FakePayload(payload_content.encode('utf-8'))
++    
++    with override_settings(DATA_UPLOAD_MAX_NUMBER_FILES=2):
++        environ = {
++            "REQUEST_METHOD": "POST",
++            "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++            "CONTENT_LENGTH": len(payload),
++            "wsgi.input": payload,
++            "SERVER_NAME": "test",
++            "SERVER_PORT": "8000",
++            "PATH_INFO": "/",
++        }
++        
++        handler = WSGIHandler()
++        response = handler(environ, lambda *a, **k: None)
++        
++        if response.status_code == 400:
++            print("SUCCESS: WSGI handler returned 400 status code")
++            return True
++        else:
++            print(f"ERROR: Expected 400 status code, got {response.status_code}")
++            return False
++
++if __name__ == "__main__":
++    if test_wsgi_handler_file_limit():
++        print("WSGI handler test passed!")
++    else:
++        print("WSGI handler test failed!")
++        sys.exit(1)
+\ No newline at end of file
+diff --git a/test_wsgi_handler_simple.py b/test_wsgi_handler_simple.py
+new file mode 100644
+index 0000000000..65cab92875
+--- /dev/null
++++ b/test_wsgi_handler_simple.py
+@@ -0,0 +1,92 @@
++#!/usr/bin/env python3
++
++import os
++import sys
++import django
++from django.conf import settings
++from django.test.client import FakePayload
++from django.core.handlers.wsgi import WSGIHandler
++from django.test.utils import override_settings
++from django.urls import path
++from django.http import HttpResponse
++
++# Simple view for testing
++def dummy_view(request):
++    print(f"Request method: {request.method}")
++    print(f"Content type: {request.content_type}")
++    print(f"POST data: {request.POST}")
++    print(f"FILES data: {request.FILES}")
++    return HttpResponse("OK")
++
++# URL patterns
++urlpatterns = [
++    path('', dummy_view),
++]
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=False,  # Set to False to avoid debug page
++        SECRET_KEY='test-secret-key',
++        USE_TZ=False,  # Disable timezone to avoid tzdata issues
++        TIME_ZONE='UTC',  # Set a simple timezone
++        LOGGING_CONFIG=None,  # Disable logging to avoid timezone issues
++        DATA_UPLOAD_MAX_NUMBER_FILES=100,
++        ROOT_URLCONF=__name__,  # Use this module as URL conf
++    )
++
++django.setup()
++
++def test_wsgi_handler_file_limit():
++    """Test that WSGI handler returns 400 for too many files."""
++    print("=== Testing WSGI handler file limit ===")
++    
++    # Create a multipart payload with 3 files
++    payload_content = (
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file1"; filename="file1.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 1\r\n"
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file2"; filename="file2.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 2\r\n"
++        "--boundary\r\n"
++        'Content-Disposition: form-data; name="file3"; filename="file3.txt"\r\n'
++        "Content-Type: text/plain\r\n"
++        "\r\n"
++        "Content of file 3\r\n"
++        "--boundary--\r\n"
++    )
++    
++    payload = FakePayload(payload_content.encode('utf-8'))
++    
++    with override_settings(DATA_UPLOAD_MAX_NUMBER_FILES=2):
++        environ = {
++            "REQUEST_METHOD": "POST",
++            "CONTENT_TYPE": "multipart/form-data; boundary=boundary",
++            "CONTENT_LENGTH": len(payload),
++            "wsgi.input": payload,
++            "SERVER_NAME": "test",
++            "SERVER_PORT": "8000",
++            "PATH_INFO": "/",
++        }
++        
++        handler = WSGIHandler()
++        response = handler(environ, lambda *a, **k: None)
++        
++        if response.status_code == 400:
++            print("SUCCESS: WSGI handler returned 400 status code")
++            return True
++        else:
++            print(f"ERROR: Expected 400 status code, got {response.status_code}")
++            return False
++
++if __name__ == "__main__":
++    if test_wsgi_handler_file_limit():
++        print("WSGI handler test passed!")
++    else:
++        print("WSGI handler test failed!")
++        sys.exit(1)
+\ No newline at end of file
+
