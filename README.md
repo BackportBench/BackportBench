@@ -4,10 +4,14 @@ BackportBench is a multilingual benchmark that contains 202 patch backporting pr
 This repository includes the code we used to collect the initial data of BackportBench and the evaluation pipeline. `eval` also includes metadata for each BackportBench task instance.
 
 All the Docker images we used for evaluation were uploaded to [DockerHub](https://hub.docker.com/u/backportbench). 
-We recommend you to pull the image manually first, e.g., `docker pull backportbench/django:220`, to avoid potential network issues during automated pulling.
+We recommend you to pull the image manually first, for example, `docker pull backportbench/django:220`, to avoid potential network issues during automated pulling.
+## Dataset Statistics
+- `label.xlsx` contains the label we created for each commit pair in the vulnerability records, indicating whether the pair represents a backport relationship and describing the extent of changes between the backported patch and the original patch.
+- `high_quality_backports.jsonl` contains additional information (such as dates and SemVer tags) for 619 backports confirmed in `label.xlsx`.
+- `eval/final_backportbench.jsonl` contains the data needed to perform patch backporting and evaluation for the 202 BackportBench instances.
 
 ## Setup
-We suggest using virtual environment with Python 3.12 installed for the evaluation. A `requirements.txt` for necessary Python dependencies is provided.
+We suggest using virtual environment (e.g., conda) with Python 3.12 installed for the evaluation. A `requirements.txt` for necessary Python dependencies is provided.
 
 
 ## Run Evaluation
