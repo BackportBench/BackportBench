@@ -1,22 +1,17 @@
 # Dataset Construction Pipeline
 
-1. From [OSV Data Dump](https://google.github.io/osv.dev/data/) get the original dataset. Here is an example for downloading pypi. We unzip all osv records (i.e., json files) of each ecosystem to a folder called `osv_records/{ecosystem}`. Here {ecosystem} can be pypi, maven, or npm.
-    
-    
-2. Create and configure processed_data folders:
-```
-mkdir -p processed_records/maven
-mkdir -p processed_records/pypi
-mkdir -p processed_records/npm
-# original is the above absolute path of the cp source(the unzip path)
-export Original_data=${original}
-# processed is the above absolute path of the cp destination
-export Processed_data=${processed}
-```
+1. Download [OSV Data Dump](https://google.github.io/osv.dev/data/) as original dataset for further curation. As an example, we use the Maven data dump from 2024-08-27 in `all.zip`. Unzip the data dumps and extract their vulnerabilities (in JSON files) for each ecosystem into a newly created folder named `osv_records/{eco}`, where {eco} can be `pypi`, `maven`, or `npm`. Remember to remove the zip files from the `osv_records/{eco}` after the records are extracted.
 
-3. Run the `deduplicate.py {eco}`, where ${eco} means the ecosystem that you want to process(like pypi, npm or maven)
-4. Create `git_repos_dir` by `mkdir -p git_repos_dir/maven git_repos_dir/pypi git_repos_dir/npm` and Run the `get_git_repo_clones.py` to get the git repositories
-5. Run the `tag_backpropagation.py {eco}`, ${eco} is the same as (3) step. This step is to obtain each repo's tag list and give the commit a semver tag (the source of semver regular pattern is [semver pattern](https://github.com/semver/semver/blob/master/semver.md))
-6. Run the `commit_filter.py {eco}` to obtain all potential datapoints
-7. Run the `patch_test_filter.py {eco}` to obtain the final datapoints to be labeled
-8. Run the `generate_label_excel.py` to get the excel table, and label the commit pair manually
+2. Create and configure data folders to be processed:
+    ```
+    mkdir -p processed_records
+    export Original_data=<absolute path to osv_records/>
+    export Processed_data=<absolute path to processed_records/>
+    ```
+
+3. Run `python get_commit_ref_for_vuln.py {eco}`. This step deduplicates vulnerabilities, finds commits in references that are relevant to the affected repositories, and filters out vulnerabilities that have fewer than two relevant commits.
+4. Run `python get_git_repo_clones.py` to clone all GitHub repositories referenced by the vulnerabilities. Since cloning all repositories can take a long time, you can manually clone an example repository in the expected output path (i.e., `collection/{eco}/`) and proceed to the next step. For example, `cd maven && git clone https://github.com/apache/cxf.git`
+5. Run `python tag_backpropagation.py {eco}`. This step retrieves each repository's commit tags and parse any available SemVer information. We use the regular expression pattern from [SemVer Source Code](https://github.com/semver/semver/blob/master/semver.md).
+6. Run `python commit_filter.py {eco}` to keep only commits that are included in SemVer tags.
+7. Run `python patch_test_filter.py {eco}` to further filter commits to those that modify both test files and non-test files.
+8. Run `python generate_label_excel.py`. his produces an Excel file containing combinations of the filtered commits. Use this Excel file to label commit pairs for backport relationships and to assign their categories.
